@@ -12,7 +12,7 @@ theme_set(theme_classic())
 # Load and reorganize data from Dataset 1 ---------------------------------------------------------------
 #Dataset1: small dataset from random locations around Vermillion
 rm(list=ls())
-setwd("~/Projects/LIA_analysis/Dataset1")
+setwd("~/Documents/soil_moisture_analysis/Dataset1")
 
 #Day of year
 DOY <- read.table('DOY.txt') #Days of year, starting from Jan 1 = 1
