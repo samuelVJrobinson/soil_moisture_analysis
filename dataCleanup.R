@@ -39,7 +39,7 @@ save(dat,file='Rdata16.Rdata')
 # Load and reorganize data from Dataset 2 ----------------------------------
 #Dataset2: larger dataset from 16 individual fields, taken over 175 days
 rm(list=ls())
-setwd("~/Projects/UofC postdoc/LIA_analysis/Dataset2")
+setwd("~/Documents/soil_moisture_analysis/Dataset1")
 
 #Problem: SAR and NDVI data are sometimes from different days
 

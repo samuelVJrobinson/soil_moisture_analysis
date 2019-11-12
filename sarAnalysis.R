@@ -58,22 +58,58 @@ load('allFieldData.Rdata')
 
 shortDat <- dat[[1]] #Field 1
 
+#Step 1: create model to fill in holes in NDVI data
 
-#Step 1: create NDVI model to fill in 
-
-
-#Plot of SAR as a function of DOY at 3 cells
+#Plot of SAR and NDVI as a function of DOY at 3 cells
 shortDat %>% filter(cell=='0_0'|cell=='50_50'|cell=='100_100') %>% 
-  ggplot(aes(doy,sar))+geom_point()+
-  geom_smooth(method='gam',formula=y~s(x,k=50),se=F)+
-  facet_wrap(~cell,ncol=1)
+  select(-colnum,-rownum,-lia) %>% 
+  pivot_longer(cols=sar:ndvi) %>% 
+  ggplot(aes(doy,value))+geom_point()+
+  geom_smooth(method='loess',se=F)+
+  facet_grid(name~cell,scales='free_y')
 
-#Raster plot of SAR
-shortDat %>% 
-  filter(doy==9|doy==165|doy==213|doy==261) %>% 
-  ggplot(aes(colnum,rownum,fill=sar))+
-  facet_wrap(~doy,ncol=2) +
-  geom_raster()+scale_y_reverse()
+#Raster plot of SAR and NDVI
+shortDat %>% select(-lia) %>% 
+  group_by(doy) %>% 
+  mutate(useThese=sum(is.na(ndvi))/n()==0) %>% ungroup() %>% 
+  filter(useThese,doy>120|doy<244) %>% select(-useThese) %>% 
+  filter(doy==129|doy==154|doy==191|doy==226) %>%
+  mutate_at(vars(sar:ndvi),scale) %>% 
+  pivot_longer(cols=sar:ndvi) %>% 
+  ggplot(aes(colnum,rownum,fill=value))+
+  facet_grid(name~doy) +
+  geom_raster()
+
+ndviMod1 <- shortDat %>% #Tensor smooth across space & time
+  mutate(ndvi=scale(ndvi)) %>% 
+  gam(ndvi~te(colnum,rownum,doy,bs='cr'),data=.,method='ML')
+
+ndviMod2 <- shortDat %>% 
+  mutate(ndvi=scale(ndvi)) %>% #Tensor smooth for space, and independent spline for time
+  gam(ndvi~te(colnum,rownum,bs='cr')+s(doy),data=.,method='ML')
+
+par(mfrow=c(2,2))
+plot(ndviMod1)
+plot(ndviMod2)
+gam.check(ndviMod1)
+gam.check(ndviMod2)
+summary(ndviMod1)
+summary(ndviMod2)
+AIC(ndviMod1,ndviMod2)
+#Second model has much higher R2, much lower AIC, and gam.check values. Time and space appear independent (for this particular location)
+
+#Gets predictions from model, fills in missing values, and truncates to temporal range of NDVI data 
+shortDat <- shortDat %>% 
+  mutate(pred=predict(ndviMod2,newdata=mutate(shortDat,ndvi=scale(ndvi)))) %>% 
+  mutate(pred=mean(ndvi,na.rm=T)+(pred*sd(ndvi,na.rm = T))) %>% #Re-scales predicted values
+  mutate(ndviNA=is.na(ndvi),ndvi=ifelse(ndviNA,pred,ndvi)) %>% #Fills in values that have NAs
+  group_by(doy) %>% mutate(allNA=!any(!ndviNA)) %>% ungroup() %>% #Identify days with only NA values for NDVI
+  mutate(mindoy=min(doy[!allNA]),maxdoy=max(doy[!allNA])) %>% #Get max and min values for days that had NDVI values
+  filter(doy>=mindoy|doy<=maxdoy) %>% #Removes days outside of the date range\
+  select(-pred,-allNA:-maxdoy) #Cleanup columns
+
+#Step 2: fit SAR model; basic framework -> gam(sar ~ ndvi + lia + te(x,y,doy))
+  
 
 #Dataset too large. Aggregating to lower resolution 
 shorterDat <- shortDat %>% 
