@@ -56,7 +56,7 @@ rm(list=ls())
 setwd("~/Documents/soil_moisture_analysis/Dataset2")
 load('allFieldData.Rdata')
 
-shortDat <- dat[[1]] #Field 1
+shortDat <- dat[[16]] #Field 16
 
 #Step 1: create model to fill in holes in NDVI data
 
@@ -68,31 +68,51 @@ shortDat %>% filter(cell=='0_0'|cell=='50_50'|cell=='100_100') %>%
   geom_smooth(method='loess',se=F)+
   facet_grid(name~cell,scales='free_y')
 
-#Raster plot of SAR and NDVI
-shortDat %>% select(-lia) %>% 
-  group_by(doy) %>% 
-  mutate(useThese=sum(is.na(ndvi))/n()==0) %>% ungroup() %>% 
-  filter(useThese,doy>120|doy<244) %>% select(-useThese) %>% 
-  filter(doy==129|doy==154|doy==191|doy==226) %>%
-  mutate_at(vars(sar:ndvi),scale) %>% 
+shortDat %>% 
+  select(-colnum,-rownum,-lia) %>% 
   pivot_longer(cols=sar:ndvi) %>% 
-  ggplot(aes(colnum,rownum,fill=value))+
-  facet_grid(name~doy) +
-  geom_raster()
+  group_by(doy,name) %>% summarize(value=mean(value,na.rm=T)) %>% 
+  ungroup() %>% filter(!is.nan(value)) %>% 
+  ggplot(aes(doy,value))+geom_point()+
+  geom_line()+
+  # geom_smooth(method='gam',se=F)+
+  facet_wrap(~name,scales='free_y')
+
+
+
+# #Raster plot of SAR and NDVI
+# shortDat %>% select(-lia) %>% 
+#   group_by(doy) %>% 
+#   mutate(useThese=sum(is.na(ndvi))/n()==0) %>% ungroup() %>% 
+#   filter(useThese,doy>120|doy<244) %>% select(-useThese) %>% 
+#   filter(doy==129|doy==154|doy==191|doy==226) %>%
+#   mutate_at(vars(sar:ndvi),scale) %>% 
+#   pivot_longer(cols=sar:ndvi) %>% 
+#   ggplot(aes(colnum,rownum,fill=value))+
+#   facet_grid(name~doy) +
+#   geom_raster()
+
+detectCores()
+cl <- makeCluster(8) #8 CPUs
 
 ndviMod1 <- shortDat %>% #Tensor smooth across space & time
   mutate(ndvi=scale(ndvi)) %>% 
-  gam(ndvi~te(colnum,rownum,doy,bs='cr'),data=.,method='ML')
+  bam(ndvi~te(colnum,rownum,doy,bs='cr',k=10),data=.,cluster=cl,method='REML')
 
 ndviMod2 <- shortDat %>% 
   mutate(ndvi=scale(ndvi)) %>% #Tensor smooth for space, and independent spline for time
-  gam(ndvi~te(colnum,rownum,bs='cr')+s(doy),data=.,method='ML')
+  bam(ndvi~te(colnum,rownum,bs='cr',k=10)+s(doy),data=.,cluster=cl,method='REML')
 
-par(mfrow=c(2,2))
-plot(ndviMod1)
-plot(ndviMod2)
-gam.check(ndviMod1)
-gam.check(ndviMod2)
+par(mfrow=c(1,1)); plot(ndviMod1,se=F,residuals=T)
+par(mfrow=c(2,2)); gam.check(ndviMod1); abline(0,1,col='red')
+
+par(mfrow=c(2,1)); plot(ndviMod2,se=F,residuals=T)
+par(mfrow=c(2,2)); gam.check(ndviMod2); abline(0,1,col='red')
+
+shortDat %>% mutate(resid=resid(ndviMod2)) %>% 
+  group_by(doy) %>% 
+  summarize(sdndvi=sd(resid))
+
 summary(ndviMod1)
 summary(ndviMod2)
 AIC(ndviMod1,ndviMod2)
