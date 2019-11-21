@@ -7,6 +7,7 @@ rm(list=ls()) #Clear workspace
 library(tidyr)
 library(dplyr)
 library(ggplot2)
+library(beepr)
 theme_set(theme_classic())
 
 # Load and reorganize data from Dataset 1 ---------------------------------------------------------------
@@ -39,13 +40,15 @@ save(dat,file='Rdata16.Rdata')
 # Load and reorganize data from Dataset 2 ----------------------------------
 #Dataset2: larger dataset from 16 individual fields, taken over 175 days
 rm(list=ls())
-setwd("~/Documents/soil_moisture_analysis/Dataset1")
+setwd("~/Documents/soil_moisture_analysis/Dataset2")
 
 #Problem: SAR and NDVI data are sometimes from different days
 
 #Accessory data
 sar_doy <- read.table('S1_DOY.txt') #Day of year for SAR data 
-ndvi_doy <- read.table('VI_DOY.txt') #Day of year for NDVI data 
+ndvi_doy <- read.table('VI_DOY.txt') #Day of year for NDVI data
+#NOTE: ndvi_doy and ndvi are from 2 years. First year should be discarded
+
 col <- read.table('COL.txt') #Column index
 row <- read.table('ROW.txt') #Row index
 
@@ -58,8 +61,9 @@ for(i in 1:length(numFiles)){
   use <- numFiles[i] #Suffix of file names
   
   #Read only data from first field
-  lia <- read.table(paste0('LIA_',use,'.txt'),na.strings='32767') #32767 = NA
-  sar <- read.table(paste0('SAR_',use,'.txt'),na.strings='32767') #32767 = NA
+  lia <- read.table(paste0('LIA_',use,'.txt'),na.strings=c('32767','0')) 
+  sar <- read.table(paste0('SAR_',use,'.txt')) %>% 
+    mutate_all(function(x) ifelse(x>=0,NA,x))
   ndvi <- read.table(paste0('VI_',use,'.txt'),na.strings = '-9999') #-9999 = NA
   # coords <- read.table(paste0('XYZ_',use,'.txt')) #Actual lat lon values
   
