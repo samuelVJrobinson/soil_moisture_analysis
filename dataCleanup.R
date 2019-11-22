@@ -47,10 +47,12 @@ setwd("~/Documents/soil_moisture_analysis/Dataset2")
 #Accessory data
 sar_doy <- read.table('S1_DOY.txt') #Day of year for SAR data 
 ndvi_doy <- read.table('VI_DOY.txt') #Day of year for NDVI data
+dim(sar_doy); dim(ndvi_doy)
 #NOTE: ndvi_doy and ndvi are from 2 years. First year should be discarded
 
 col <- read.table('COL.txt') #Column index
 row <- read.table('ROW.txt') #Row index
+dim(col); dim(row)
 
 #File numbers to append to text
 numFiles <- gsub('.txt','',gsub('LIA_','',list.files(pattern='LIA')))
@@ -65,7 +67,10 @@ for(i in 1:length(numFiles)){
   sar <- read.table(paste0('SAR_',use,'.txt')) %>% 
     mutate_all(function(x) ifelse(x>=0,NA,x))
   ndvi <- read.table(paste0('VI_',use,'.txt'),na.strings = '-9999') #-9999 = NA
+  #This is roughly twice the length of the others because 2 platforms were used to get NDVI. Should amalgamate to an average over a single day.
+  
   # coords <- read.table(paste0('XYZ_',use,'.txt')) #Actual lat lon values
+  dim(lia); dim(sar); dim(ndvi)
   
   #Rows are all individual days, corresponding to doy
   #Columns are individual points at a field (10201 = 101 x 101), with rows first
@@ -75,6 +80,7 @@ for(i in 1:length(numFiles)){
   doymat <- matrix(rep(sar_doy[,1],each=ncol(lia)),ncol=ncol(sar),nrow=nrow(sar),byrow=T)
   colmat <- matrix(rep(as.vector(t(as.matrix(col))),nrow(sar)),ncol=ncol(sar),nrow=nrow(sar),byrow=T)
   rowmat <- matrix(rep(as.vector(t(as.matrix(row))),nrow(sar)),ncol=ncol(sar),nrow=nrow(sar),byrow=T)
+  dim(doymat); dim(colmat); dim(rowmat)
   
   #Combine into single dataframe
   dat[[i]] <- data.frame(lia=as.vector(as.matrix(lia)),
@@ -88,15 +94,20 @@ for(i in 1:length(numFiles)){
   unite(id,cell,doy,sep='_',remove=F) %>% #Create id column for merge
   as.data.frame() 
   
-  # #Tests - looks OK
-  # dat[[i]] %>% filter(cell=='0_0') %>% ggplot(aes(doy,sar))+geom_point()
-  # dat[[i]] %>% filter(doy==190) %>% ggplot(aes(colnum,rownum,fill=sar))+geom_raster()
+  #Tests - looks OK
+  # dat[[i]] %>% filter(cell=='50_50') %>% ggplot(aes(doy,sar))+geom_point()+labs(title=paste('Field',i,'at cell 50_50'))
+  # chooseday <- dat[[i]] %>% select(doy) %>% distinct() %>% mutate(diff=abs(doy-190)) %>% filter(diff==min(diff)) %>% slice(1) %>% .$doy #Choose day closest to 190
+  # dat[[i]] %>% filter(doy==chooseday) %>% ggplot(aes(colnum,rownum,fill=sar))+geom_raster()+labs(title=paste('Field',i,'SAR on day',chooseday))
+  
+  p1 <- dat[[i]] %>% ggplot(aes(colnum,rownum,fill=sar))+ geom_raster()+facet_wrap(~doy)+ labs(title=paste('Field',i,'SAR')) +scale_y_reverse()
+  ggsave(paste0('./Figures/Field',i,'SAR.png'),p1,width=8,height=8)
 
   #NDVI
   #Create matrices of matching dimensionality, just to make sure conversion is correct
   doymat <- matrix(rep(ndvi_doy[,1],each=ncol(lia)),ncol=ncol(ndvi),nrow=nrow(ndvi),byrow=T)
   colmat <- matrix(rep(as.vector(t(as.matrix(col))),nrow(ndvi)),ncol=ncol(ndvi),nrow=nrow(ndvi),byrow=T)
   rowmat <- matrix(rep(as.vector(t(as.matrix(row))),nrow(ndvi)),ncol=ncol(ndvi),nrow=nrow(ndvi),byrow=T)
+  dim(doymat); dim(colmat); dim(rowmat)
   
   #Combine into dataframe
   dat2 <- data.frame(ndvi=as.vector(as.matrix(ndvi)),
@@ -104,25 +115,32 @@ for(i in 1:length(numFiles)){
                          doy=as.vector(doymat)) %>%
     filter(!is.na(ndvi)) %>% 
     group_by(colnum,rownum,doy) %>% summarize(ndvi=mean(ndvi,na.rm=T)) %>% ungroup() %>% #Average measurements on same day
+    group_by(doy) %>% mutate(percmissing=1-(n()/ncol(doymat))) %>% ungroup() %>% 
+    filter(percmissing<0.20) %>% select(-percmissing) %>% #Days with more than 20% of pixels missing are excluded
     mutate(ndviScal=scale(ndvi)) %>% #Scale ndvi
     unite(cell,colnum,rownum,remove=F) %>% mutate(cell=factor(cell)) %>%  #Create discrete "cell" factor from row/col
     unite(id,cell,doy,sep='_',remove=F) %>% #Create id column for merge
     as.data.frame()
   
-  # #Test -looks OK
-  # dat2 %>% filter(doy==116|doy==139|doy==201|doy==234) %>% 
-  #   ggplot(aes(rownum,colnum,fill=ndvi))+geom_raster()+
-  #   facet_wrap(~doy)
+  #Test -looks OK
+  # dat2 %>% filter(cell=='50_50') %>% ggplot(aes(doy,ndvi))+geom_point()+labs(title=paste('Field',i,'at cell 50_50'))
+  # chooseday <- dat2 %>% select(doy) %>% distinct() %>% mutate(diff=abs(doy-190)) %>% filter(diff==min(diff)) %>% slice(1) %>% .$doy #Choose first day closest to 190
+  # dat2 %>% filter(doy==chooseday) %>%  ggplot(aes(rownum,colnum,fill=ndvi))+geom_raster()+ facet_wrap(~doy) + labs(title=paste('Field',i,'on day',chooseday)) 
+  # dat2 %>% filter(doy>=179 & doy<=211) %>% ggplot(aes(rownum,colnum,fill=ndvi))+geom_raster()+facet_wrap(~doy)
   
-  # dat2 %>% filter(cell=='0_0'|cell=='50_50'|cell=='100_100') %>% 
-  #   ggplot(aes(doy,ndvi))+geom_point()+
-  #   geom_smooth(method='loess')+
-  #   facet_wrap(~cell,ncol=1)
+  p1 <- dat2 %>% ggplot(aes(colnum,rownum,fill=ndvi))+ geom_raster()+facet_wrap(~doy)+ labs(title=paste('Field',i,'NDVI'))+scale_y_reverse()
+  ggsave(paste0('./Figures/Field',i,'NDVI.png'),p1,width=8,height=8)
   
-  #Merge NDVI with SAR, LIA data
+  #Merge NDVI with SAR, LIA data - full_join keeps all row IDs
+  # dat[[i]] <- 
+  # temp1 <- 
+  
   dat[[i]] <- dat[[i]] %>% 
-    left_join(select(dat2,id,ndvi),by='id') %>% 
-    select(-id)
+    select(id,lia,sar) %>% 
+    full_join(select(dat2,id,ndvi),by='id') %>% 
+    separate(id,c('colnum','rownum','doy'),sep='_',convert=T) %>% 
+    unite(cell,colnum,rownum,remove=F) %>%
+    arrange(colnum,rownum,doy)
   
   rm(doymat,colmat,rowmat,dat2) #Cleanup extra matrices
   gc()

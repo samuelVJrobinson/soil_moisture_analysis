@@ -56,7 +56,7 @@ rm(list=ls())
 setwd("~/Documents/soil_moisture_analysis/Dataset2")
 load('allFieldData.Rdata')
 
-shortDat <- dat[[16]] #Field 16
+shortDat <- dat[[1]] #Field 1
 
 #Step 1: create model to fill in holes in NDVI data
 
@@ -68,55 +68,58 @@ shortDat %>% filter(cell=='0_0'|cell=='50_50'|cell=='100_100') %>%
   geom_smooth(method='loess',se=F)+
   facet_grid(name~cell,scales='free_y')
 
+#Average over the entire field
 shortDat %>% 
-  select(-colnum,-rownum,-lia) %>% 
-  pivot_longer(cols=sar:ndvi) %>% 
-  group_by(doy,name) %>% summarize(value=mean(value,na.rm=T)) %>% 
-  ungroup() %>% filter(!is.nan(value)) %>% 
-  ggplot(aes(doy,value))+geom_point()+
+  select(-colnum,-rownum,-lia) %>% pivot_longer(cols=sar:ndvi) %>% 
+  group_by(doy,name) %>% summarize(mean=mean(value,na.rm=T),sd=sd(value,na.rm = T)) %>% 
+  ungroup() %>% filter(!is.nan(mean)) %>% 
+  ggplot(aes(doy,mean))+
+  geom_pointrange(aes(ymax=mean+sd,ymin=mean-sd))+
   geom_line()+
   # geom_smooth(method='gam',se=F)+
   facet_wrap(~name,scales='free_y')
 
-
-
-# #Raster plot of SAR and NDVI
-# shortDat %>% select(-lia) %>% 
-#   group_by(doy) %>% 
-#   mutate(useThese=sum(is.na(ndvi))/n()==0) %>% ungroup() %>% 
-#   filter(useThese,doy>120|doy<244) %>% select(-useThese) %>% 
-#   filter(doy==129|doy==154|doy==191|doy==226) %>%
-#   mutate_at(vars(sar:ndvi),scale) %>% 
-#   pivot_longer(cols=sar:ndvi) %>% 
-#   ggplot(aes(colnum,rownum,fill=value))+
-#   facet_grid(name~doy) +
-#   geom_raster()
-
 detectCores()
-cl <- makeCluster(8) #8 CPUs
+cl <- makeCluster(4) #4 CPUs - very little performance increase
 
 ndviMod1 <- shortDat %>% #Tensor smooth across space & time
   mutate(ndvi=scale(ndvi)) %>% 
-  bam(ndvi~te(colnum,rownum,doy,bs='cr',k=10),data=.,cluster=cl,method='REML')
+  bam(ndvi~ti(colnum,rownum,doy,bs='cr',k=10)+te(colnum,rownum,bs='cr',k=10)+s(doy),data=.,cluster=cl,method='REML')
 
-ndviMod2 <- shortDat %>% 
-  mutate(ndvi=scale(ndvi)) %>% #Tensor smooth for space, and independent spline for time
+ndviMod2 <- shortDat %>% #Tensor smooth for space, and independent spline for time
+  mutate(ndvi=scale(ndvi)) %>% 
   bam(ndvi~te(colnum,rownum,bs='cr',k=10)+s(doy),data=.,cluster=cl,method='REML')
 
 par(mfrow=c(1,1)); plot(ndviMod1,se=F,residuals=T)
 par(mfrow=c(2,2)); gam.check(ndviMod1); abline(0,1,col='red')
 
-par(mfrow=c(2,1)); plot(ndviMod2,se=F,residuals=T)
+  par(mfrow=c(2,1)); plot(ndviMod2,se=F,residuals=T)
 par(mfrow=c(2,2)); gam.check(ndviMod2); abline(0,1,col='red')
-
-shortDat %>% mutate(resid=resid(ndviMod2)) %>% 
-  group_by(doy) %>% 
-  summarize(sdndvi=sd(resid))
 
 summary(ndviMod1)
 summary(ndviMod2)
 AIC(ndviMod1,ndviMod2)
-#Second model has much higher R2, much lower AIC, and gam.check values. Time and space appear independent (for this particular location)
+
+#All the residuals seem to be fairly heavy-tailed. Perhaps this has something to do with the day-to-day varation?
+#Next step: see what kind of smoothing is appropriate for a single day's worth of NDVI data. This may inform the spatio-temporal smoothing.
+#Try days 179 and 194 (june 28, july 13)
+
+tempDat <- shortDat %>% #Tensor smooth across space - takes a long time
+  filter(doy==179) %>% 
+  mutate(ndvi=scale(ndvi))
+ndviMod3 <- bam(ndvi~te(colnum,rownum,bs='cr',k=20),data=tempDat,cluster=cl,method='REML')
+
+par(mfrow=c(1,1)); plot(ndviMod3,se=F,residuals=T)
+par(mfrow=c(2,2)); gam.check(ndviMod3); abline(0,1,col='red')
+
+tempDat %>% #Compares actual values, predictions, and residuals
+  select(colnum,rownum,ndvi) %>% 
+  mutate(pred=predict(ndviMod3),res=resid(ndviMod3)) %>% 
+  pivot_longer(col=ndvi:res,names_to = 'type',values_to='meas') %>% 
+  ggplot(aes(colnum,rownum,fill=meas))+geom_raster()+
+  facet_wrap(~type)
+
+#Very high-res smoothing takes a very long time, but looks OK in terms of predictions. Further increasing k enhances resolution of predictions. Problems exist trying to model small "holes" in the crop (possibly areas that didn't get filled in?)
 
 #Gets predictions from model, fills in missing values, and truncates to temporal range of NDVI data 
 shortDat <- shortDat %>% 
