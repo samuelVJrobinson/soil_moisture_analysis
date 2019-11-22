@@ -56,7 +56,7 @@ rm(list=ls())
 setwd("~/Documents/soil_moisture_analysis/Dataset2")
 load('allFieldData.Rdata')
 
-shortDat <- dat[[1]] #Field 1
+shortDat <- dat[[16]] #Field 16
 
 #Step 1: create model to fill in holes in NDVI data
 
@@ -68,253 +68,65 @@ shortDat %>% filter(cell=='0_0'|cell=='50_50'|cell=='100_100') %>%
   geom_smooth(method='loess',se=F)+
   facet_grid(name~cell,scales='free_y')
 
-#Average over the entire field
+
+#Average over the entire field  
 shortDat %>% 
-  select(-colnum,-rownum,-lia) %>% pivot_longer(cols=sar:ndvi) %>% 
+  select(-colnum,-rownum) %>% pivot_longer(cols=lia:ndvi) %>% 
   group_by(doy,name) %>% summarize(mean=mean(value,na.rm=T),sd=sd(value,na.rm = T)) %>% 
   ungroup() %>% filter(!is.nan(mean)) %>% 
   ggplot(aes(doy,mean))+
   geom_pointrange(aes(ymax=mean+sd,ymin=mean-sd))+
   geom_line()+
-  # geom_smooth(method='gam',se=F)+
-  facet_wrap(~name,scales='free_y')
+  facet_wrap(~name,scales='free_y',ncol=1)
 
 detectCores()
-cl <- makeCluster(4) #4 CPUs - very little performance increase
+cl <- makeCluster(4) #4 CPUs - seems to provide little performance increase
 
-ndviMod1 <- shortDat %>% #Tensor smooth across space & time
-  mutate(ndvi=scale(ndvi)) %>% 
-  bam(ndvi~ti(colnum,rownum,doy,bs='cr',k=10)+te(colnum,rownum,bs='cr',k=10)+s(doy),data=.,cluster=cl,method='REML')
 
-ndviMod2 <- shortDat %>% #Tensor smooth for space, and independent spline for time
-  mutate(ndvi=scale(ndvi)) %>% 
-  bam(ndvi~te(colnum,rownum,bs='cr',k=10)+s(doy),data=.,cluster=cl,method='REML')
-
-par(mfrow=c(1,1)); plot(ndviMod1,se=F,residuals=T)
+load('ndviMod1Field16.Rdata')
+# ndviMod1 <- shortDat %>% #Tensor smooth across space & time
+#   mutate(ndvi=scale(ndvi)) %>%
+#   bam(ndvi~ti(colnum,rownum,doy,bs='cr',k=12)+te(colnum,rownum,bs='cr',k=12)+s(doy,k=10),data=.,cluster=cl,method='REML')
+# save(ndviMod1,file='ndviMod1Field16.Rdata')
+par(mfrow=c(3,1)); plot(ndviMod1,se=F,residuals=T)
 par(mfrow=c(2,2)); gam.check(ndviMod1); abline(0,1,col='red')
+summary(ndviMod1) #Not the best in terms of residual and k' checks, but probably the best we're going to get at this point. Likely driven down by cloudy days.
 
-  par(mfrow=c(2,1)); plot(ndviMod2,se=F,residuals=T)
-par(mfrow=c(2,2)); gam.check(ndviMod2); abline(0,1,col='red')
-
-summary(ndviMod1)
-summary(ndviMod2)
-AIC(ndviMod1,ndviMod2)
-
+#NOTES:   
+#Also tried tensor smooth for space, with independent spline for time: ndvi~te(colnum,rownum,bs='cr',k=12)+s(doy,k=20)
+#Results are similar, but with worse AIC and slightly lower R2. However, most of the signal taken up by time component, so leaving out some spatial variation doesn't matter much
 #All the residuals seem to be fairly heavy-tailed. Perhaps this has something to do with the day-to-day varation?
 #Next step: see what kind of smoothing is appropriate for a single day's worth of NDVI data. This may inform the spatio-temporal smoothing.
-#Try days 179 and 194 (june 28, july 13)
-
-tempDat <- shortDat %>% #Tensor smooth across space - takes a long time
-  filter(doy==179) %>% 
-  mutate(ndvi=scale(ndvi))
-ndviMod3 <- bam(ndvi~te(colnum,rownum,bs='cr',k=20),data=tempDat,cluster=cl,method='REML')
-
-par(mfrow=c(1,1)); plot(ndviMod3,se=F,residuals=T)
-par(mfrow=c(2,2)); gam.check(ndviMod3); abline(0,1,col='red')
-
-tempDat %>% #Compares actual values, predictions, and residuals
-  select(colnum,rownum,ndvi) %>% 
-  mutate(pred=predict(ndviMod3),res=resid(ndviMod3)) %>% 
-  pivot_longer(col=ndvi:res,names_to = 'type',values_to='meas') %>% 
-  ggplot(aes(colnum,rownum,fill=meas))+geom_raster()+
-  facet_wrap(~type)
-
-#Very high-res smoothing takes a very long time, but looks OK in terms of predictions. Further increasing k enhances resolution of predictions. Problems exist trying to model small "holes" in the crop (possibly areas that didn't get filled in?)
+#Result: high-res smoothing takes a very long time, but looks OK in terms of predictions. Further increasing k enhances resolution of predictions. Problems exist trying to model small "holes" in the crop (possibly areas that didn't get filled in?)
+#If just using this to "fill in" values, probably won't hurt to use ndviMod1
 
 #Gets predictions from model, fills in missing values, and truncates to temporal range of NDVI data 
 shortDat <- shortDat %>% 
-  mutate(pred=predict(ndviMod2,newdata=mutate(shortDat,ndvi=scale(ndvi)))) %>% 
+  mutate(pred=predict(ndviMod1,newdata=shortDat)) %>% 
   mutate(pred=mean(ndvi,na.rm=T)+(pred*sd(ndvi,na.rm = T))) %>% #Re-scales predicted values
   mutate(ndviNA=is.na(ndvi),ndvi=ifelse(ndviNA,pred,ndvi)) %>% #Fills in values that have NAs
+  #Keep going here  
   group_by(doy) %>% mutate(allNA=!any(!ndviNA)) %>% ungroup() %>% #Identify days with only NA values for NDVI
   mutate(mindoy=min(doy[!allNA]),maxdoy=max(doy[!allNA])) %>% #Get max and min values for days that had NDVI values
-  filter(doy>=mindoy|doy<=maxdoy) %>% #Removes days outside of the date range\
+  filter(doy>=mindoy&doy<=maxdoy) %>% #Removes days outside of the date range
+  filter(!is.na(sar)&!is.na(lia)) %>% #Remove days without LIA or SAR
   select(-pred,-allNA:-maxdoy) #Cleanup columns
 
-#Step 2: fit SAR model; basic framework -> gam(sar ~ ndvi + lia + te(x,y,doy))
+shortDat %>% group_by(doy) %>% 
+  summarize(ndvi=mean(ndvi),imputed=!any(!ndviNA)) %>% 
+  ggplot(aes(doy,ndvi,col=imputed))+geom_point()+geom_line(aes(group=1))
+
+#Step 2: fit SAR model; basic framework -> gam(sar ~ ndvi + lia + ti(x,y,doy) + te(x,y,doy) + s(doy))
   
+sarMod1 <- bam(sar~lia+ndvi+s(doy,k=20)+te(colnum,rownum)+ti(colnum,rownum,doy),
+               data=mutate(shortDat,sar=scale(sar)),cluster=cl)
 
-#Dataset too large. Aggregating to lower resolution 
-shorterDat <- shortDat %>% 
-  # mutate(newCol=colnum%/%5,newRow=rownum%/%5) %>% #Aggregates pixels to 5x5 (50x50m)
-  # mutate(newCol=colnum%/%4,newRow=rownum%/%4) %>% #Aggregates pixels to 4x4 (40x40m)
-  mutate(colnum=colnum%/%3,rownum=rownum%/%3) %>% #Aggregates pixels to 3x3 (30x30m)
-  group_by(colnum,rownum,doy) %>% summarize_at(vars(sar,lia),mean) %>% ungroup() %>% 
-  mutate(cell=factor(paste(colnum,rownum,sep='_'))) %>% 
-  mutate(sar=scale(sar),lia=(lia/100)-40)
-
-shorterDat %>% 
-  filter(cell=='3_7'|cell=='0_30'|cell=='30_30') %>% 
-  ggplot(aes(doy,sar))+geom_point()+
-  geom_smooth(method='gam',formula=y~s(x,k=50),se=F)+
-  facet_wrap(~cell,ncol=1)
-
-shorterDat %>% 
-  filter(doy==9|doy==165|doy==213|doy==261) %>% 
-  ggplot(aes(colnum,rownum,fill=sar))+
-  facet_wrap(~doy,ncol=2) +
-  geom_raster()+scale_y_reverse()
-
-detectCores()
-cl <- makeCluster(8) #6 CPUs
-
-# mod1 <- gamm(sar~1+lia+s(doy,bs='cr'),random=list(cell=~1+lia),
-#              data=shorterDat,control=list(msVerbose=TRUE))
-mod2 <- bam(sar~1+lia+s(doy,bs='cr')+s(cell,bs='re')+s(cell,lia,bs='re'),
-            data=shorterDat,cluster=cl); beep(2)
-mod3 <- bam(sar~1+lia+s(doy,bs='cr')+s(cell,bs='re'),data=shorterDat,cluster=cl); beep(2)
-mod4 <- bam(sar~1+lia+s(doy,bs='cr',k=30),data=shorterDat,cluster=cl); beep(2)
-
-# summary(mod1$gam)
-# summary(mod1$lme)
-# plot(mod1$gam,select=1)
-# plot(mod1$lme)
-summary(mod2) #Between-cell variance is very low, and estimates appear iffy. Diagnosis: random effects should be removed for now.
-gam.vcomp(mod2)
-plot(mod2)
-
-summary(mod3) 
-gam.vcomp(mod3)
-summary(mod4) 
-gam.vcomp(mod4)
-plot(mod4)
-
-data.frame(doy=121:243,pred=predict(mod4,newdata=data.frame(lia=0,doy=121:243))) %>% 
-  ggplot(aes(doy,pred))
+par(mfrow=c(3,2)); plot(sarMod1,se=F,all.terms=T,residuals=T)
+par(mfrow=c(2,2)); gam.check(sarMod1); abline(0,1,col='red')
+summary(sarMod1) #Not the best in terms of residual and k' checks, but probably the best we're going to get at this point. Likely driven down by cloudy days.
 
 
-# #Compare random slopes and intercepts from gamm and bam models
-# data.frame(gammInt=ranef(mod1$lme)[[2]][,1],gammSlope=ranef(mod1$lme)[[2]][,2],
-#            bamInt=coef(mod2)[grepl('s\\(cell\\)',names(coef(mod2)))],
-#            bamSlope=coef(mod2)[grepl('s\\(cell,lia\\)',names(coef(mod2)))]) %>% 
-#   pairs(.,upper.panel=function(x,y) {points(x,y); abline(0,1,col='red')},
-#         lower.panel=function(x,y) text(mean(x),mean(y),round(cor(x,y),3),cex=0.1+cor(x,y)*2),
-#         main='Intercepts')
-
-# #Plot of random effects from gamm model
-# ranef(mod1$lme)[[2]] %>%
-#   rename('Int'='(Intercept)','liaSlope'='lia') %>% 
-  # rownames_to_column() %>% mutate(rowname=gsub('1/','',rowname)) %>% 
-  # separate(rowname,c('col','row'),sep='_',convert=T) %>% 
-  # mutate_at(vars(Int,liaSlope),scale) %>%
-  # pivot_longer(Int:liaSlope,names_to = 'type',values_to = 'value') %>% 
-  # # filter(type=='liaSlope') %>% 
-  # ggplot(aes(x=col,y=row,fill=value))+geom_raster()+
-  # facet_wrap(~type)+
-  # labs(fill='Scaled\nvalue')+
-  # scale_y_reverse()
-
-
-ranefMod2 <- data.frame(int=coef(mod2)[grepl('s\\(cell\\)',names(coef(mod2)))],
-           liaSlope=coef(mod2)[grepl('s\\(cell,lia\\)',names(coef(mod2)))],
-           cell=levels(shorterDat$cell)) %>% 
-  separate(cell,c('col','row'),sep='_',convert=T)
-
-ggplot(ranefMod2,aes(x=col,y=row,fill=int))+geom_raster()+
-  scale_y_reverse()
-ggplot(ranefMod2,aes(x=col,y=row,fill=liaSlope))+geom_raster()+
-  scale_y_reverse()
-
-
-
-           
-#Appears to be spatial AC, both in intercepts and slopes, but need to verify. Check at 53.50933 -110.1945 (this field)
 
 stopCluster(cl)
-
-
-# Calculate NDVI --------------------------------------------------------------------
-setwd("~/Projects/LIA_analysis/NDVI1")
-ndvi <- read.table('NDVI.txt',stringsAsFactors=F)
-
-ndvi <- strsplit(ndvi[c(1:nrow(ndvi)),],',')
-
-ndvi <- lapply(1:(length(ndvi)/2),function(x){
-  data.frame(site=x,doy=ndvi[[(x*2)-1]],NDVI=ndvi[[(x*2)]])
-})
-
-ndvi <- do.call('rbind',ndvi) %>% mutate(site=factor(site)) %>% 
-  mutate_at(vars(doy:NDVI),function(x) as.numeric(as.character(x))) %>% 
-  mutate(logNDVI=log(NDVI))
-
-ggplot(ndvi,aes(doy,logNDVI))+geom_point()+
-  facet_wrap(~site)+
-  geom_smooth(method='gam',formula=y~s(x,bs='cr'))+
-  labs(y='log(ndvi) value')
-
-mod5 <- gam(logNDVI~site+s(doy,by=site,bs='cs'),data=ndvi)
-summary(mod5)
-gam.check(mod5)
-plot(mod5,pages=1,residuals=F,se=F,rug=F,by.resids=F)
-
-#Predictions for range of date values
-ndviMod <- with(ndvi,expand.grid(site=unique(site),doy=min(doy):max(doy))) %>% 
-  mutate(predNDVI=exp(predict(mod5,newdata=data.frame(site,doy)))) #Back-transform
-
-#Check predictions - looks OK
-ndviMod %>% 
-  ggplot(aes(doy,predNDVI))+geom_line()+
-  geom_point(data=ndvi,aes(x=doy,y=NDVI))+
-  facet_wrap(~site)+labs(y='NDVI')
-
-
-# Use NDVI with tensor product ----------------------------------------------------------
-
-detectCores()
-cl <- makeCluster(12)
-
-#Range of dates to restrict analysis to
-dateRange <- filter(ndviMod,site==1) %>% summarize(lwr=min(doy),upr=max(doy))
-
-shortDat <- dat[[1]] %>%  #Field 1
-  filter(doy>=dateRange$lwr,doy<=dateRange$upr) %>% #Restrict to doy range of NDVI data
-  left_join(filter(ndviMod,site==1),by='doy') %>% 
-  mutate(NDVIScal=scale(predNDVI)[,1]) %>%  #Scale NDVI
-  mutate(sarScal=sarScal[,1],liaScal=liaScal[,1])
-
-#More complex version with tensor product smooth  
-mod6 <- bam(sarScal ~ liaScal + s(NDVIScal) + te(colnum,rownum,doy),data=shortDat,cluster=cl); beep(1)
-summary(mod6)
-gam.check(mod6)
-plot(mod6,se=T,all.terms=T,residuals=T,pages=1)
-
-shortDat %>% mutate(resid=resid(mod6)) %>% 
-  ggplot(aes(NDVIScal,resid))+geom_point(alpha=0.5)+
-  geom_smooth()
-
-shortDat %>% mutate(pred=predict(mod6,newdata=mutate_at(shortDat,vars(liaScal,NDVIScal),mean)),resid=resid(mod6)) %>% 
-  filter(cell=='50_50'|cell=='0_0'|cell=='100_100') %>% 
-  ggplot(aes(x=doy))+geom_line(aes(y=pred))+geom_point(aes(y=pred+resid))+
-  facet_wrap(~cell,ncol=1)
-  
-  
-
-#Simpler version with single smoother
-mod6a <- bam(sarScal ~ liaScal + s(NDVIScal) + s(doy),data=shortDat,cluster=cl); beep(1)
-summary(mod6a)
-gam.check(mod6a)
-plot(mod6a,se=T,all.terms=T,residuals=T,pages=1)
-
-
-
-
-# stopCluster(cl)
-
-
-
-
-shortDat %>% mutate(resid=resid(mod6)) %>% 
-  filter(doy==165) %>% 
-  ggplot(aes(colnum,rownum,fill=resid))+geom_raster()+
-  scale_y_reverse()
-
-
-  
-stopCluster(cl)  
-
-
-
-
-
 
 
