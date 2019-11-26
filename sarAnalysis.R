@@ -59,10 +59,11 @@ load('allFieldData.Rdata') #Load list of dataframes
 library(foreach)
 library(doParallel)
 
-cl <- makeCluster(8) #8 cores
+cl <- makeCluster(4) #8 cores
 registerDoParallel(cl)
 
-foreach(i=1:length(dat),.packages=c('dplyr','tidyr','mgcv')) %dopar% {
+# foreach(i=1:length(dat),.packages=c('dplyr','tidyr','mgcv')) %dopar% {
+for(i in 1:length(dat)){
   shortDat <- dat[[i]] #Field i
   #Step 1: create model to fill in holes in NDVI data
   
@@ -86,20 +87,20 @@ foreach(i=1:length(dat),.packages=c('dplyr','tidyr','mgcv')) %dopar% {
   #   facet_wrap(~name,scales='free_y',ncol=1)+
   #   labs(x='DOY',y='Mean value',title=paste('Field ',i,'mean values'))
   
-  # load('ndviMod1Field16.Rdata')
-  ndviMod1 <- shortDat %>% #Tensor smooth across space & time
-    mutate(ndvi=scale(ndvi)) %>%
-    bam(ndvi~ti(colnum,rownum,doy,bs='cr',k=12)+ti(colnum,rownum,bs='cr',k=12)+s(doy,k=12),data=.,method='REML')
-  save(ndviMod1,file=paste0('./ModelResults/ndviMod1Field',i,'.Rdata'))
-  
-  #Save output figures
-  png(paste0('./ModelResults/ndviMod1Field',i,'.png'),height=1200,width=600)
-  par(mfrow=c(3,1)); plot(ndviMod1,se=F,residuals=T)
-  dev.off()
-  
-  png(paste0('./ModelResults/ndviMod1Field',i,'Resid.png'),height=800,width=800)
-  par(mfrow=c(2,2)); gam.check(ndviMod1); abline(0,1,col='red')
-  dev.off()
+  load(paste0('./ModelResults/ndviMod1Field',i,'.Rdata'))
+  # ndviMod1 <- shortDat %>% #Tensor smooth across space & time
+  #   mutate(ndvi=scale(ndvi)) %>%
+  #   bam(ndvi~ti(colnum,rownum,doy,bs='cr',k=12)+ti(colnum,rownum,bs='cr',k=12)+s(doy,k=12),data=.,method='REML')
+  # save(ndviMod1,file=paste0('./ModelResults/ndviMod1Field',i,'.Rdata'))
+
+  # #Save output figures
+  # png(paste0('./ModelResults/ndviMod1Field',i,'.png'),height=1200,width=600)
+  # par(mfrow=c(3,1)); plot(ndviMod1,se=F,residuals=T)
+  # dev.off()
+  # 
+  # png(paste0('./ModelResults/ndviMod1Field',i,'Resid.png'),height=800,width=800)
+  # par(mfrow=c(2,2)); gam.check(ndviMod1); abline(0,1,col='red')
+  # dev.off()
   # summary(ndviMod1) #Not the best in terms of residual and k' checks, but probably the best we're going to get at this point. Likely driven down by cloudy days.
   
   #NOTES:   
@@ -111,12 +112,12 @@ foreach(i=1:length(dat),.packages=c('dplyr','tidyr','mgcv')) %dopar% {
   #Problems exist trying to model small "holes" in the crop (possibly areas that didn't get filled in?)
   #If just using this to "fill in" values, probably won't hurt to use ndviMod1
   
-  #Gets predictions from model, fills in missing values, and truncates to temporal range of NDVI data 
-  shortDat <- shortDat %>% 
-    mutate(pred=predict(ndviMod1,newdata=shortDat)) %>% 
+  #Gets predictions from model, fills in missing values, and truncates to temporal range of NDVI data
+  shortDat <- shortDat %>%
+    mutate(pred=predict(ndviMod1,newdata=shortDat)) %>%
     mutate(pred=mean(ndvi,na.rm=T)+(pred*sd(ndvi,na.rm = T))) %>% #Re-scales predicted values
     mutate(ndviNA=is.na(ndvi),ndvi=ifelse(ndviNA,pred,ndvi)) %>% #Fills in values that have NAs
-    #Keep going here  
+    #Keep going here
     group_by(doy) %>% mutate(allNA=!any(!ndviNA)) %>% ungroup() %>% #Identify days with only NA values for NDVI
     mutate(mindoy=min(doy[!allNA]),maxdoy=max(doy[!allNA])) %>% #Get max and min values for days that had NDVI values
     filter(doy>=mindoy&doy<=maxdoy) %>% #Removes days outside of the date range
@@ -129,22 +130,23 @@ foreach(i=1:length(dat),.packages=c('dplyr','tidyr','mgcv')) %dopar% {
   #   ggplot(aes(doy,ndvi,col=imputed))+geom_point()+geom_line(aes(group=1))
   
   #Step 2: fit SAR model; basic framework -> gam(sar ~ ndvi + lia + ti(x,y,doy) + te(x,y,doy) + s(doy))
-  sarMod1 <- bam(sar~lia+ndvi+s(doy,k=12)+ti(colnum,rownum,k=12)+ti(colnum,rownum,doy,k=12),
+  # load(paste0('./ModelResults/sarMod1Field',i,'.Rdata'))
+  sarMod1 <- bam(sar~lia+ndvi+s(doy)+ti(colnum,rownum)+ti(colnum,rownum,doy),
                  data=mutate(shortDat,sar=scale(sar)))
-  save(sarMod1,file=paste0('./ModelResults/sarMod1Field',i,'.Rdata'))
+  # save(sarMod1,file=paste0('./ModelResults/sarMod1Field',i,'.Rdata'))
   
   png(paste0('./ModelResults/sarMod1Field',i,'.png'),height=1200,width=600)
   par(mfrow=c(3,2)); plot(sarMod1,se=F,all.terms=T,residuals=T)
   dev.off()
   
-  png(paste0('./ModelResults/sarMod1Field',i,'Resid.png'),height=1200,width=600)
+  png(paste0('./ModelResults/sarMod1Field',i,'Resid.png'),height=800,width=800)
   par(mfrow=c(2,2)); gam.check(sarMod1); abline(0,1,col='red')
   dev.off()
-  gc()
+  
+  rm(shortDat,ndviMod1,sarMod1); gc() #Cleanup
   print(paste0('Finished field ',i))
-  
 }
-  
-stopCluster(cl) #Appears to work
+beepr::beep(2)  
+# stopCluster(cl) #Appears to work
 
 
