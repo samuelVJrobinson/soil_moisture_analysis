@@ -100,7 +100,7 @@ for(i in 1:length(numFiles)){
   # dat[[i]] %>% filter(doy==chooseday) %>% ggplot(aes(colnum,rownum,fill=sar))+geom_raster()+labs(title=paste('Field',i,'SAR on day',chooseday))
   
   p1 <- dat[[i]] %>% ggplot(aes(colnum,rownum,fill=sar))+ geom_raster()+facet_wrap(~doy)+ labs(title=paste('Field',i,'SAR')) +scale_y_reverse()
-  ggsave(paste0('./Figures/Field',i,'SAR.png'),p1,width=8,height=8)
+  ggsave(paste0('./DataFigures/Field',i,'SAR.png'),p1,width=8,height=8)
 
   #NDVI
   #Create matrices of matching dimensionality, just to make sure conversion is correct
@@ -129,7 +129,7 @@ for(i in 1:length(numFiles)){
   # dat2 %>% filter(doy>=179 & doy<=211) %>% ggplot(aes(rownum,colnum,fill=ndvi))+geom_raster()+facet_wrap(~doy)
   
   p1 <- dat2 %>% ggplot(aes(colnum,rownum,fill=ndvi))+ geom_raster()+facet_wrap(~doy)+ labs(title=paste('Field',i,'NDVI'))+scale_y_reverse()
-  ggsave(paste0('./Figures/Field',i,'NDVI.png'),p1,width=8,height=8)
+  ggsave(paste0('./DataFigures/Field',i,'NDVI.png'),p1,width=8,height=8)
   
   #Merge NDVI with SAR, LIA data - full_join keeps all row IDs
   # dat[[i]] <- 

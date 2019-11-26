@@ -54,79 +54,97 @@ plot(mod3,all.terms=T)
 #To start, only using a single field's worth of data:
 rm(list=ls())
 setwd("~/Documents/soil_moisture_analysis/Dataset2")
-load('allFieldData.Rdata')
+load('allFieldData.Rdata') #Load list of dataframes
 
-shortDat <- dat[[16]] #Field 16
+library(foreach)
+library(doParallel)
 
-#Step 1: create model to fill in holes in NDVI data
+cl <- makeCluster(8) #8 cores
+registerDoParallel(cl)
 
-#Plot of SAR and NDVI as a function of DOY at 3 cells
-shortDat %>% filter(cell=='0_0'|cell=='50_50'|cell=='100_100') %>% 
-  select(-colnum,-rownum,-lia) %>% 
-  pivot_longer(cols=sar:ndvi) %>% 
-  ggplot(aes(doy,value))+geom_point()+
-  geom_smooth(method='loess',se=F)+
-  facet_grid(name~cell,scales='free_y')
-
-
-#Average over the entire field  
-shortDat %>% 
-  select(-colnum,-rownum) %>% pivot_longer(cols=lia:ndvi) %>% 
-  group_by(doy,name) %>% summarize(mean=mean(value,na.rm=T),sd=sd(value,na.rm = T)) %>% 
-  ungroup() %>% filter(!is.nan(mean)) %>% 
-  ggplot(aes(doy,mean))+
-  geom_pointrange(aes(ymax=mean+sd,ymin=mean-sd))+
-  geom_line()+
-  facet_wrap(~name,scales='free_y',ncol=1)
-
-detectCores()
-cl <- makeCluster(4) #4 CPUs - seems to provide little performance increase
-
-
-load('ndviMod1Field16.Rdata')
-# ndviMod1 <- shortDat %>% #Tensor smooth across space & time
-#   mutate(ndvi=scale(ndvi)) %>%
-#   bam(ndvi~ti(colnum,rownum,doy,bs='cr',k=12)+te(colnum,rownum,bs='cr',k=12)+s(doy,k=10),data=.,cluster=cl,method='REML')
-# save(ndviMod1,file='ndviMod1Field16.Rdata')
-par(mfrow=c(3,1)); plot(ndviMod1,se=F,residuals=T)
-par(mfrow=c(2,2)); gam.check(ndviMod1); abline(0,1,col='red')
-summary(ndviMod1) #Not the best in terms of residual and k' checks, but probably the best we're going to get at this point. Likely driven down by cloudy days.
-
-#NOTES:   
-#Also tried tensor smooth for space, with independent spline for time: ndvi~te(colnum,rownum,bs='cr',k=12)+s(doy,k=20)
-#Results are similar, but with worse AIC and slightly lower R2. However, most of the signal taken up by time component, so leaving out some spatial variation doesn't matter much
-#All the residuals seem to be fairly heavy-tailed. Perhaps this has something to do with the day-to-day varation?
-#Next step: see what kind of smoothing is appropriate for a single day's worth of NDVI data. This may inform the spatio-temporal smoothing.
-#Result: high-res smoothing takes a very long time, but looks OK in terms of predictions. Further increasing k enhances resolution of predictions. Problems exist trying to model small "holes" in the crop (possibly areas that didn't get filled in?)
-#If just using this to "fill in" values, probably won't hurt to use ndviMod1
-
-#Gets predictions from model, fills in missing values, and truncates to temporal range of NDVI data 
-shortDat <- shortDat %>% 
-  mutate(pred=predict(ndviMod1,newdata=shortDat)) %>% 
-  mutate(pred=mean(ndvi,na.rm=T)+(pred*sd(ndvi,na.rm = T))) %>% #Re-scales predicted values
-  mutate(ndviNA=is.na(ndvi),ndvi=ifelse(ndviNA,pred,ndvi)) %>% #Fills in values that have NAs
-  #Keep going here  
-  group_by(doy) %>% mutate(allNA=!any(!ndviNA)) %>% ungroup() %>% #Identify days with only NA values for NDVI
-  mutate(mindoy=min(doy[!allNA]),maxdoy=max(doy[!allNA])) %>% #Get max and min values for days that had NDVI values
-  filter(doy>=mindoy&doy<=maxdoy) %>% #Removes days outside of the date range
-  filter(!is.na(sar)&!is.na(lia)) %>% #Remove days without LIA or SAR
-  select(-pred,-allNA:-maxdoy) #Cleanup columns
-
-shortDat %>% group_by(doy) %>% 
-  summarize(ndvi=mean(ndvi),imputed=!any(!ndviNA)) %>% 
-  ggplot(aes(doy,ndvi,col=imputed))+geom_point()+geom_line(aes(group=1))
-
-#Step 2: fit SAR model; basic framework -> gam(sar ~ ndvi + lia + ti(x,y,doy) + te(x,y,doy) + s(doy))
+foreach(i=1:length(dat),.packages=c('dplyr','tidyr','mgcv')) %dopar% {
+  shortDat <- dat[[i]] #Field i
+  #Step 1: create model to fill in holes in NDVI data
   
-sarMod1 <- bam(sar~lia+ndvi+s(doy,k=20)+te(colnum,rownum)+ti(colnum,rownum,doy),
-               data=mutate(shortDat,sar=scale(sar)),cluster=cl)
-
-par(mfrow=c(3,2)); plot(sarMod1,se=F,all.terms=T,residuals=T)
-par(mfrow=c(2,2)); gam.check(sarMod1); abline(0,1,col='red')
-summary(sarMod1) #Not the best in terms of residual and k' checks, but probably the best we're going to get at this point. Likely driven down by cloudy days.
-
-
-
-stopCluster(cl)
+  # #Plot of SAR and NDVI as a function of DOY at 3 cells
+  # shortDat %>% filter(cell=='0_0'|cell=='50_50'|cell=='100_100') %>% 
+  #   select(-colnum,-rownum,-lia) %>% 
+  #   pivot_longer(cols=sar:ndvi) %>% 
+  #   ggplot(aes(doy,value))+geom_point()+
+  #   geom_smooth(method='loess',se=F)+
+  #   facet_grid(name~cell,scales='free_y')
+  
+  
+  #Average over the entire field  
+  # shortDat %>% 
+  #   select(-colnum,-rownum) %>% pivot_longer(cols=lia:ndvi) %>% 
+  #   group_by(doy,name) %>% summarize(mean=mean(value,na.rm=T),sd=sd(value,na.rm = T)) %>% 
+  #   ungroup() %>% filter(!is.nan(mean)) %>% 
+  #   ggplot(aes(doy,mean))+
+  #   geom_pointrange(aes(ymax=mean+sd,ymin=mean-sd))+
+  #   geom_line()+
+  #   facet_wrap(~name,scales='free_y',ncol=1)+
+  #   labs(x='DOY',y='Mean value',title=paste('Field ',i,'mean values'))
+  
+  # load('ndviMod1Field16.Rdata')
+  ndviMod1 <- shortDat %>% #Tensor smooth across space & time
+    mutate(ndvi=scale(ndvi)) %>%
+    bam(ndvi~ti(colnum,rownum,doy,bs='cr',k=12)+ti(colnum,rownum,bs='cr',k=12)+s(doy,k=12),data=.,method='REML')
+  save(ndviMod1,file=paste0('./ModelResults/ndviMod1Field',i,'.Rdata'))
+  
+  #Save output figures
+  png(paste0('./ModelResults/ndviMod1Field',i,'.png'),height=1200,width=600)
+  par(mfrow=c(3,1)); plot(ndviMod1,se=F,residuals=T)
+  dev.off()
+  
+  png(paste0('./ModelResults/ndviMod1Field',i,'Resid.png'),height=800,width=800)
+  par(mfrow=c(2,2)); gam.check(ndviMod1); abline(0,1,col='red')
+  dev.off()
+  # summary(ndviMod1) #Not the best in terms of residual and k' checks, but probably the best we're going to get at this point. Likely driven down by cloudy days.
+  
+  #NOTES:   
+  #Also tried tensor smooth for space, with independent spline for time: ndvi~te(colnum,rownum,bs='cr',k=12)+s(doy,k=20)
+  #Results are similar, but with worse AIC and slightly lower R2. However, most of the signal taken up by time component, so leaving out some spatial variation doesn't matter much
+  #All the residuals seem to be fairly heavy-tailed. Perhaps this has something to do with the day-to-day varation?
+  #Next step: see what kind of smoothing is appropriate for a single day's worth of NDVI data. This may inform the spatio-temporal smoothing.
+  #Result: high-res smoothing takes a very long time, but looks OK in terms of predictions. Further increasing k enhances resolution of predictions. 
+  #Problems exist trying to model small "holes" in the crop (possibly areas that didn't get filled in?)
+  #If just using this to "fill in" values, probably won't hurt to use ndviMod1
+  
+  #Gets predictions from model, fills in missing values, and truncates to temporal range of NDVI data 
+  shortDat <- shortDat %>% 
+    mutate(pred=predict(ndviMod1,newdata=shortDat)) %>% 
+    mutate(pred=mean(ndvi,na.rm=T)+(pred*sd(ndvi,na.rm = T))) %>% #Re-scales predicted values
+    mutate(ndviNA=is.na(ndvi),ndvi=ifelse(ndviNA,pred,ndvi)) %>% #Fills in values that have NAs
+    #Keep going here  
+    group_by(doy) %>% mutate(allNA=!any(!ndviNA)) %>% ungroup() %>% #Identify days with only NA values for NDVI
+    mutate(mindoy=min(doy[!allNA]),maxdoy=max(doy[!allNA])) %>% #Get max and min values for days that had NDVI values
+    filter(doy>=mindoy&doy<=maxdoy) %>% #Removes days outside of the date range
+    filter(!is.na(sar)&!is.na(lia)) %>% #Remove days without LIA or SAR
+    select(-pred,-allNA:-maxdoy) #Cleanup columns
+  
+  # #Looks OK
+  # shortDat %>% group_by(doy) %>% 
+  #   summarize(ndvi=mean(ndvi),imputed=!any(!ndviNA)) %>% 
+  #   ggplot(aes(doy,ndvi,col=imputed))+geom_point()+geom_line(aes(group=1))
+  
+  #Step 2: fit SAR model; basic framework -> gam(sar ~ ndvi + lia + ti(x,y,doy) + te(x,y,doy) + s(doy))
+  sarMod1 <- bam(sar~lia+ndvi+s(doy,k=12)+ti(colnum,rownum,k=12)+ti(colnum,rownum,doy,k=12),
+                 data=mutate(shortDat,sar=scale(sar)))
+  save(sarMod1,file=paste0('./ModelResults/sarMod1Field',i,'.Rdata'))
+  
+  png(paste0('./ModelResults/sarMod1Field',i,'.png'),height=1200,width=600)
+  par(mfrow=c(3,2)); plot(sarMod1,se=F,all.terms=T,residuals=T)
+  dev.off()
+  
+  png(paste0('./ModelResults/sarMod1Field',i,'Resid.png'),height=1200,width=600)
+  par(mfrow=c(2,2)); gam.check(sarMod1); abline(0,1,col='red')
+  dev.off()
+  gc()
+  print(paste0('Finished field ',i))
+  
+}
+  
+stopCluster(cl) #Appears to work
 
 
