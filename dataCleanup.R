@@ -151,3 +151,44 @@ beep(1)
   
 save(dat,file='allFieldData.Rdata') #Save as R file
 
+
+
+# Load and reorganize data from Dataset 3 --------------------------------
+
+rm(list=ls())
+setwd("~/Documents/soil_moisture_analysis/Dataset3")
+
+#Soil moisture and climate data from stations
+soilwater <- read.csv('ACIS_DailyData_2018.csv',stringsAsFactors = F) %>% 
+  select(-Precip..Accumulated.Source.Flag,-Precip..Source.Flag) %>% 
+  filter(grepl('Vermilion',Station.Name)) %>%  #Filter all station data except Vermillion
+  mutate(Date..Local.Standard.Time.=1:nrow(.))
+names(soilwater) <- c('station','doy','precipAccum','precipAccumNote','precip','precipNote','soilwater','soilwaterFlag','soilwaterComplete')
+
+ggplot(soilwater,aes(doy,soilwater))+geom_point()+geom_line() #looks ok
+  
+#LIA
+lia <- read.csv('Vermilion_AGDM_LIA.txt',stringsAsFactors = F,sep=' ',na.strings='32767',header=F)
+names(lia) <- c(paste0('cell','_',rep(1:7,each=7),'_',rep(1:7,7)),'doy')
+lia <- lia %>% mutate(doy=read.csv('Vermilion_AGDM_S1_DOY.txt',header=F)[,]) #Add day of year
+
+ggplot(lia,aes(doy,cell_1_1))+geom_point()+geom_line() #looks ok
+
+#NDVI - problem with this data
+ndvi <- read.csv('Vermilion_AGDM_NDVI.txt',sep=' ',stringsAsFactors = F,header=F,na.strings='17936')
+names(ndvi) <- paste0('cell','_',rep(1:7,each=7),'_',rep(1:7,7))
+ndvi <- ndvi %>% mutate(doy=read.csv('Vermilion_AGDM_S2_DOY.txt',header=F)[,]) #Add day of year
+
+#SAR
+sar <- read.csv('Vermilion_AGDM_SAR.txt',stringsAsFactors = F,sep=' ',na.strings='32767',header=F)
+names(sar) <- paste0('cell','_',rep(1:7,each=7),'_',rep(1:7,7))
+sar <- sar %>% mutate(doy=read.csv('Vermilion_AGDM_S1_DOY.txt',header=F)[,]) %>% #Add day of year
+  group_by(doy) %>% summarize_all(list(~mean(.,na.rm=T))) %>% #Aggregate by day
+  ungroup() %>% mutate_all(list(~ifelse(is.nan(.),NA,.)))
+
+ggplot(sar,aes(doy,cell_1_1))+geom_point() #looks ok
+
+
+
+
+  

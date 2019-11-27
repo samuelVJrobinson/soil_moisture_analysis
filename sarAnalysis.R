@@ -149,4 +149,15 @@ for(i in 1:length(dat)){
 beepr::beep(2)  
 # stopCluster(cl) #Appears to work
 
+#Summary: "predicted soil moisture" (i.e. spatio-temporal patterns | NDVI, LIA) seems reasonable, but we have no way of telling without looking at actual soil moisture data. Next set of analyses should deal with this.
+
+
+# Dataset 3 ---------------------------------------------------------------
+
+#Dataset 3: set of SAR, NDVI, LIA observations around climate stations, where soil moisture was recorded as well
+
+rm(list=ls())
+setwd("~/Documents/soil_moisture_analysis/Dataset2")
+
+
 
