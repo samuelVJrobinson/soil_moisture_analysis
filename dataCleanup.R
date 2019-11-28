@@ -162,32 +162,56 @@ setwd("~/Documents/soil_moisture_analysis/Dataset3")
 soilwater <- read.csv('ACIS_DailyData_2018.csv',stringsAsFactors = F) %>% 
   select(-Precip..Accumulated.Source.Flag,-Precip..Source.Flag) %>% 
   filter(grepl('Vermilion',Station.Name)) %>%  #Filter all station data except Vermillion
-  mutate(Date..Local.Standard.Time.=1:nrow(.))
-names(soilwater) <- c('station','doy','precipAccum','precipAccumNote','precip','precipNote','soilwater','soilwaterFlag','soilwaterComplete')
+  mutate(Date..Local.Standard.Time.=1:nrow(.)) %>% 
+  setNames(.,c('station','doy','precipAccum','precipAccumNote','precip','precipNote','soilwater','soilwaterFlag','soilwaterComplete')) %>% 
+  select(-station,-precipAccumNote,-precipNote,-soilwaterFlag)
 
-ggplot(soilwater,aes(doy,soilwater))+geom_point()+geom_line() #looks ok
+soilwater %>% select(-soilwaterComplete) %>% 
+  pivot_longer(cols=precipAccum:soilwater) %>% 
+  ggplot(aes(doy,value))+geom_point()+geom_line()+
+  facet_wrap(~name,ncol=1,scales='free_y') #Looks ok
   
 #LIA
-lia <- read.csv('Vermilion_AGDM_LIA.txt',stringsAsFactors = F,sep=' ',na.strings='32767',header=F)
-names(lia) <- c(paste0('cell','_',rep(1:7,each=7),'_',rep(1:7,7)),'doy')
-lia <- lia %>% mutate(doy=read.csv('Vermilion_AGDM_S1_DOY.txt',header=F)[,]) #Add day of year
+lia <- read.csv('Vermilion_AGDM_LIA.txt',stringsAsFactors = F,sep=' ',na.strings='32767',header=F) %>%
+  mutate(doy=read.csv('Vermilion_AGDM_S1_DOY.txt',header=F)[,]) %>% #Add day of year
+  setNames(.,c(paste0('cell','_',rep(1:7,each=7),'_',rep(1:7,7)),'doy')) %>% #Fix column names
+  group_by(doy) %>% summarize_all(~mean(.,na.rm=T)) %>% ungroup() %>% #Average over day
+  mutate_all(~ifelse(is.nan(.),NA,.)) 
 
 ggplot(lia,aes(doy,cell_1_1))+geom_point()+geom_line() #looks ok
 
-#NDVI - problem with this data
-ndvi <- read.csv('Vermilion_AGDM_NDVI.txt',sep=' ',stringsAsFactors = F,header=F,na.strings='17936')
-names(ndvi) <- paste0('cell','_',rep(1:7,each=7),'_',rep(1:7,7))
-ndvi <- ndvi %>% mutate(doy=read.csv('Vermilion_AGDM_S2_DOY.txt',header=F)[,]) #Add day of year
+#NDVI 
+ndvi <- read.csv('Vermilion_AGDM_NDVI.txt',sep=' ',stringsAsFactors = F,header=F,na.strings='-9999') %>% 
+  mutate(doy=read.csv('Vermilion_AGDM_S2_DOY.txt',header=F)[,]) %>%  #Add day of year
+  setNames(.,c(paste0('cell','_',rep(1:7,each=7),'_',rep(1:7,7)),'doy')) %>% 
+  group_by(doy) %>% summarize_all(~mean(.,na.rm=T)) %>% ungroup() %>% #Average over day
+  mutate_all(~ifelse(is.nan(.),NA,.)) 
+  
+  ggplot(ndvi,aes(doy,cell_1_1))+geom_point()+geom_line()+geom_smooth(method='gam',formula=y~s(x,k=5)) #looks ok
 
-#SAR
-sar <- read.csv('Vermilion_AGDM_SAR.txt',stringsAsFactors = F,sep=' ',na.strings='32767',header=F)
-names(sar) <- paste0('cell','_',rep(1:7,each=7),'_',rep(1:7,7))
-sar <- sar %>% mutate(doy=read.csv('Vermilion_AGDM_S1_DOY.txt',header=F)[,]) %>% #Add day of year
-  group_by(doy) %>% summarize_all(list(~mean(.,na.rm=T))) %>% #Aggregate by day
-  ungroup() %>% mutate_all(list(~ifelse(is.nan(.),NA,.)))
-
+#SAR 
+sar <- read.csv('Vermilion_AGDM_SAR.txt',stringsAsFactors = F,sep=' ',na.strings='32767',header=F) %>% 
+  mutate(doy=read.csv('Vermilion_AGDM_S1_DOY.txt',header=F)[,]) %>% #Add day of year
+  setNames(.,c(paste0('cell','_',rep(1:7,each=7),'_',rep(1:7,7)),'doy')) %>% 
+  group_by(doy) %>% summarize_all(~mean(.,na.rm=T)) %>% ungroup() %>% #Average over day
+  mutate_all(~ifelse(is.nan(.),NA,.)) 
+  
 ggplot(sar,aes(doy,cell_1_1))+geom_point() #looks ok
 
+#Combine into single dataframe
+dat <- bind_rows(mutate(sar,meas='sar'),mutate(ndvi,meas='ndvi'),mutate(lia,meas='lia')) %>%
+  pivot_longer(cols=contains('cell')) %>% rowwise() %>% 
+  transmute(id=gsub('cell',doy,name),meas,value) %>% ungroup() %>% 
+  pivot_wider(names_from = meas, values_from = value) %>% 
+  separate(id,c('doy','row','col'),convert=T) %>%
+  left_join(select(soilwater,doy,precipAccum,precip,soilwater),by='doy')
+
+dat %>% group_by(doy) %>% 
+  summarize(sar=mean(sar),ndvi=mean(ndvi),lia=mean(lia),precip=first(precip),soilwater=first(soilwater)) %>% 
+  pivot_longer(cols=sar:soilwater) %>% 
+  ggplot(aes(doy,value))+geom_point()+geom_line()+facet_wrap(~name,ncol=1,scales='free_y')
+
+save(dat,file='metStationDat.Rdata') #Save as R file
 
 
 

@@ -7,6 +7,7 @@ rm(list=ls()) #Clear workspace
 library(tidyverse)
 library(ggplot2)
 library(mgcv)
+library(lme4)
 library(parallel)
 library(beepr)
 theme_set(theme_classic())
@@ -157,7 +158,27 @@ beepr::beep(2)
 #Dataset 3: set of SAR, NDVI, LIA observations around climate stations, where soil moisture was recorded as well
 
 rm(list=ls())
-setwd("~/Documents/soil_moisture_analysis/Dataset2")
+setwd("~/Documents/soil_moisture_analysis/Dataset3")
+
+load('metStationDat.Rdata')
+
+dat <- select(dat,-precipAccum,-precip) %>% 
+  mutate(uprNDVI=max(doy[!is.na(ndvi)]),lwrNDVI=min(doy[!is.na(ndvi)])) %>% #Filter to range of NDVI data
+  filter(doy>=lwrNDVI & doy<=uprNDVI) %>% select(-uprNDVI,-lwrNDVI) %>%
+  group_by(row,col) %>% 
+  mutate(ndviInterp=approx(doy,ndvi,doy)$y) %>% ungroup() %>% #Interpolate NDVI values
+  unite(cell,row,col,remove = F)
+  
+dat %>% filter(row>4,col>4) %>% 
+  ggplot(aes(x=doy,y=ndvi))+ geom_point()+
+  geom_line(aes(y=ndviInterp),col='red')+
+  facet_grid(row~col) #Looks OK
+
+sarMod1 <- mutate(dat,sar=scale(sar),lia=(lia/100)-30) %>% 
+  lmer(sar~lia+(lia|cell),data=.) 
+summary(sarMod1)
+
+
 
 
 
