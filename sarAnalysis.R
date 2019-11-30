@@ -162,23 +162,82 @@ setwd("~/Documents/soil_moisture_analysis/Dataset3")
 
 load('metStationDat.Rdata')
 
-dat <- select(dat,-precipAccum,-precip) %>% 
-  mutate(uprNDVI=max(doy[!is.na(ndvi)]),lwrNDVI=min(doy[!is.na(ndvi)])) %>% #Filter to range of NDVI data
-  filter(doy>=lwrNDVI & doy<=uprNDVI) %>% select(-uprNDVI,-lwrNDVI) %>%
-  group_by(row,col) %>% 
+dat <- dat %>% 
+  mutate(uprNDVI=max(doy[!is.na(ndvi)&!is.na(sar)]),lwrNDVI=min(doy[!is.na(ndvi)&!is.na(sar)])) %>% #Filter to range of NDVI amd SAR data
+  filter(doy>=lwrNDVI & doy<=uprNDVI) %>% select(-uprNDVI,-lwrNDVI) %>% group_by(row,col) %>% 
   mutate(ndviInterp=approx(doy,ndvi,doy)$y) %>% ungroup() %>% #Interpolate NDVI values
-  unite(cell,row,col,remove = F)
+  unite(cell,row,col,remove = F) 
   
 dat %>% filter(row>4,col>4) %>% 
   ggplot(aes(x=doy,y=ndvi))+ geom_point()+
   geom_line(aes(y=ndviInterp),col='red')+
   facet_grid(row~col) #Looks OK
 
-sarMod1 <- mutate(dat,sar=scale(sar),lia=(lia/100)-30) %>% 
-  lmer(sar~lia+(lia|cell),data=.) 
-summary(sarMod1)
+#Mixed effects model of SAR, using cell as a random intercept (singularity occurs if random slopes used)
+#Variables linearly scaled. Log scaling provides no better fit
+dat1 <- dat %>% mutate_at(vars(sar,lia,ndviInterp,soilwater),scale) %>%  #Scale variables
+  filter_at(vars(sar=sar,lia,ndviInterp,soilwater),~!is.na(.)) #Get rid of NA values
+# dat1 %>% select(sar,lia,soilwater,ndviInterp,precip) %>% pairs(.) #Look at distribution of data
+
+sarMod1 <- dat1 %>% lmer(sar~ndviInterp+soilwater+lia+(1|cell),data=.,REML=F)
+#Continue here 
+
+{
+  par(mfrow=c(3,1)); qqnorm(resid(sarMod1)); qqline(resid(sarMod1)); plot(fitted(sarMod1),resid(sarMod1)); plot(predict(sarMod1),predict(sarMod1)+resid(sarMod1),ylab='actual') 
+  abline(0,1,col='red')
+}
+summary(sarMod1) #LIA
 
 
+#Residuals appear to increase over time
+dat1 %>% mutate(res=resid(sarMod1)) %>%
+  select(doy,res) %>% 
+  ggplot(aes(doy,res))+
+  geom_point()+geom_smooth(method='gam',formula=y~s(x,k=8))
 
+#Residuals appear spatially structured 
+dat1 %>% mutate(res=resid(sarMod1)) %>% 
+  group_by(cell) %>% summarize(res=mean(res)) %>% 
+  separate(cell,c('row','col'),sep='_') %>% 
+  ggplot(aes(row,col,fill=res))+geom_raster()
+
+#Residuals mainly vary across time of the season
+resMod1 <- dat1 %>% mutate(res=resid(sarMod1)) %>% 
+  separate(cell,c('row','col'),sep='_',convert = T) %>% 
+  select(doy,row,col,res) %>% as.data.frame() %>% 
+  gam(res~s(doy)+ti(row,col),data=.)
+summary(resMod1)
+par(mfrow=c(2,1)); plot(resMod1,se=F,residuals=T)
+par(mfrow=c(2,2)); gam.check(resMod1); abline(0,1,col='red')
+
+#Do residuals vary with other factors?
+dat1 %>% mutate(res=resid(sarMod1)) %>% 
+  select(-cell,-ndvi,-row,-col,-sar,-precipAccum) %>% 
+  pivot_longer(cols=doy:ndviInterp) %>% 
+  ggplot(aes(value,res))+geom_point()+
+  facet_wrap(~name,scales='free')
+
+#Partial effect of LIA
+dat1 %>% mutate(soilwater=0,ndviInterp=0) %>% #Marginalize across soilwater/ndviInterp
+  mutate(pred=predict(sarMod1,newdata=.,re.form=~0),res=resid(sarMod1)) %>% 
+  ggplot(aes(lia,pred))+ 
+  geom_point(aes(y=pred+res))+geom_line(col='red',size=1)+
+  labs(x='LIA',y='SAR | NDVI,Soilwater',title = 'Partial effect of LIA')
+
+#Partial effect of NDVI
+dat1 %>% mutate_at(vars(sar,lia,ndviInterp,soilwater),scale) %>% 
+  mutate(soilwater=0,lia=0) %>% 
+  mutate(pred=predict(sarMod1,newdata=.,re.form=~0),res=resid(sarMod1)) %>% 
+  ggplot(aes(ndviInterp,pred))+geom_point(aes(y=pred+res,col=doy))+geom_line(col='red',size=1)+
+  labs(x='NDVI',y='SAR | LIA,Soilwater',title = 'Partial effect of NDVI')
+
+#Partial effect of soilwater
+dat1 %>% mutate_at(vars(sar,lia,ndviInterp,soilwater),scale) %>% 
+  mutate(lia=0,ndviInterp=0) %>% 
+  mutate(pred=predict(sarMod1,newdata=.,re.form=~0),res=resid(sarMod1)) %>% 
+  ggplot(aes(soilwater,pred))+geom_point(aes(y=pred+res,col=doy))+geom_line(col='red',size=1)+
+  labs(x='Soilwater',y='SAR | LIA,NDVI',title = 'Partial effect of Soilwater')
+
+dat2 <- dat1 %>% 
 
 
