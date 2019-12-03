@@ -6,6 +6,7 @@ rm(list=ls()) #Clear workspace
 
 library(tidyverse)
 library(ggplot2)
+library(ggpubr) #Multiple ggplots at once
 library(mgcv)
 library(lme4)
 library(parallel)
@@ -160,11 +161,14 @@ beepr::beep(2)
 rm(list=ls())
 setwd("~/Documents/soil_moisture_analysis/Dataset3")
 
+detach("package:lme4", unload = TRUE)
+library(nlme)
+
 load('metStationDat.Rdata')
 
 dat <- dat %>% 
   mutate(uprNDVI=max(doy[!is.na(ndvi)&!is.na(sar)]),lwrNDVI=min(doy[!is.na(ndvi)&!is.na(sar)])) %>% #Filter to range of NDVI amd SAR data
-  filter(doy>=lwrNDVI & doy<=uprNDVI) %>% select(-uprNDVI,-lwrNDVI) %>% group_by(row,col) %>% 
+    filter(doy>=lwrNDVI & doy<=uprNDVI) %>% select(-uprNDVI,-lwrNDVI) %>% group_by(row,col) %>% 
   mutate(ndviInterp=approx(doy,ndvi,doy)$y) %>% ungroup() %>% #Interpolate NDVI values
   unite(cell,row,col,remove = F) 
   
@@ -175,19 +179,16 @@ dat %>% filter(row>4,col>4) %>%
 
 #Mixed effects model of SAR, using cell as a random intercept (singularity occurs if random slopes used)
 #Variables linearly scaled. Log scaling provides no better fit
-dat1 <- dat %>% mutate_at(vars(sar,lia,ndviInterp,soilwater),scale) %>%  #Scale variables
+dat1 <- dat %>% mutate_at(vars(sar,lia,ndviInterp,soilwater,precip),scale) %>%  #Scale variables
   filter_at(vars(sar=sar,lia,ndviInterp,soilwater),~!is.na(.)) #Get rid of NA values
 # dat1 %>% select(sar,lia,soilwater,ndviInterp,precip) %>% pairs(.) #Look at distribution of data
 
-sarMod1 <- dat1 %>% lmer(sar~ndviInterp+soilwater+lia+(1|cell),data=.,REML=F)
-#Continue here 
-
-{
+sarMod1 <- lme(sar~ndviInterp+lia*soilwater,random=~1|cell,correlation=corAR1(form=~doy|cell),data=dat1,method='ML') #Best that can be done at the moment
+summary(sarMod1) 
+{ #Residuals
   par(mfrow=c(3,1)); qqnorm(resid(sarMod1)); qqline(resid(sarMod1)); plot(fitted(sarMod1),resid(sarMod1)); plot(predict(sarMod1),predict(sarMod1)+resid(sarMod1),ylab='actual') 
   abline(0,1,col='red')
 }
-summary(sarMod1) #LIA
-
 
 #Residuals appear to increase over time
 dat1 %>% mutate(res=resid(sarMod1)) %>%
@@ -217,27 +218,68 @@ dat1 %>% mutate(res=resid(sarMod1)) %>%
   ggplot(aes(value,res))+geom_point()+
   facet_wrap(~name,scales='free')
 
-#Partial effect of LIA
-dat1 %>% mutate(soilwater=0,ndviInterp=0) %>% #Marginalize across soilwater/ndviInterp
-  mutate(pred=predict(sarMod1,newdata=.,re.form=~0),res=resid(sarMod1)) %>% 
-  ggplot(aes(lia,pred))+ 
-  geom_point(aes(y=pred+res))+geom_line(col='red',size=1)+
-  labs(x='LIA',y='SAR | NDVI,Soilwater',title = 'Partial effect of LIA')
+#Partial effect of LIA/Soilwater interaction
+p1 <- dat1 %>% 
+  mutate(SWcat=cut(soilwater,3,labels=c('Low','Mid','High'))) %>% 
+  group_by(SWcat) %>% mutate(soilwater=mean(soilwater)) %>% ungroup() %>% 
+  mutate(ndviInterp=0,precip=0) %>% #Marginalize across soilwater/ndviInterp
+  mutate(pred=predict(sarMod1,newdata=.,level=0),res=resid(sarMod1)) %>%
+  ggplot(aes(lia,pred,col=SWcat,group=SWcat))+ 
+  geom_point(aes(y=pred+res),alpha=0.5)+ 
+  geom_line(size=1)+
+  labs(x='LIA',y='SAR | NDVI,Precip',title = 'Partial effect of LIA',col='Soilwater')+
+  scale_colour_manual(values=c('Blue','Purple','Red'))+
+  theme(legend.position='top')
 
 #Partial effect of NDVI
-dat1 %>% mutate_at(vars(sar,lia,ndviInterp,soilwater),scale) %>% 
-  mutate(soilwater=0,lia=0) %>% 
-  mutate(pred=predict(sarMod1,newdata=.,re.form=~0),res=resid(sarMod1)) %>% 
-  ggplot(aes(ndviInterp,pred))+geom_point(aes(y=pred+res,col=doy))+geom_line(col='red',size=1)+
-  labs(x='NDVI',y='SAR | LIA,Soilwater',title = 'Partial effect of NDVI')
+p2 <- dat1 %>% mutate_at(vars(sar,lia,ndviInterp,soilwater,precip),scale) %>% 
+  mutate(soilwater=0,lia=0,precip=0) %>% 
+  mutate(pred=predict(sarMod1,newdata=.,level=0),res=resid(sarMod1)) %>% 
+  ggplot(aes(ndviInterp,pred))+geom_point(aes(y=pred+res),alpha=0.5)+geom_line(col='red',size=1)+
+  labs(x='NDVI',y='SAR | LIA,Soilwater,Precip',title = 'Partial effect of NDVI')
 
 #Partial effect of soilwater
-dat1 %>% mutate_at(vars(sar,lia,ndviInterp,soilwater),scale) %>% 
-  mutate(lia=0,ndviInterp=0) %>% 
-  mutate(pred=predict(sarMod1,newdata=.,re.form=~0),res=resid(sarMod1)) %>% 
-  ggplot(aes(soilwater,pred))+geom_point(aes(y=pred+res,col=doy))+geom_line(col='red',size=1)+
-  labs(x='Soilwater',y='SAR | LIA,NDVI',title = 'Partial effect of Soilwater')
+p3 <- dat1 %>% mutate_at(vars(sar,lia,ndviInterp,soilwater,precip),scale) %>% 
+  mutate(lia=0,ndviInterp=0,precip=0) %>% 
+  mutate(pred=predict(sarMod1,newdata=.,level=0),res=resid(sarMod1)) %>% 
+  ggplot(aes(soilwater,pred))+geom_point(aes(y=pred+res),alpha=0.5)+geom_line(col='red',size=1)+
+  labs(x='Soilwater',y='SAR | LIA,NDVI,Precip',title = 'Partial effect of Soilwater')
 
-dat2 <- dat1 %>% 
+# #Partial effect of precip - this doesn't make any sense
+# p4 <- dat1 %>% mutate_at(vars(sar,lia,ndviInterp,soilwater,precip),scale) %>% 
+#   mutate(lia=0,ndviInterp=0,soilwater=0) %>% 
+#   mutate(pred=predict(sarMod1,newdata=.,level=0),res=resid(sarMod1)) %>% 
+#   ggplot(aes(precip,pred))+geom_point(aes(y=pred+res))+geom_line(col='red',size=1)+
+#   labs(x='Precip',y='SAR | LIA,NDVI,Soilwater',title = 'Partial effect of Precip')
 
+#Try predicting soil moisture from other variables, using this formula:
+#soilmoisure = (sar - b0 - bLIA * LIA - bNDVI * NDVI) / (bSW + bSWLIA * LIA)
+
+SMfun <- function(coefs,sar,lia,ndvi) { #Requires coefficients in this order: intercept, LIA, NDVI, SW, LIA:SW
+  (sar - coefs[1] - coefs[2] * lia - coefs[3] * ndvi) / (coefs[4] + coefs[5] * lia)
+}
+
+#Back-calculate
+with(dat1,SMfun(fixef(sarMod1),sar=sar,lia=lia,ndvi=ndviInterp))
+
+#Predicted soil moisture (per-cell)
+ggplot(dat1,aes(predSM,soilwater))+geom_point()+
+  geom_abline(intercept=0,slope=1,col='red')+
+  labs(x='Predicted',y='Actual')
+
+#Precited soil moisture (per-day))
+p4 <- dat1 %>% group_by(doy) %>% 
+  summarize_at(vars(sar,ndviInterp,lia,soilwater),mean) %>% 
+  mutate(predSM=SMfun(fixef(sarMod1),sar=sar,lia=lia,ndvi=ndviInterp)) %>% 
+  ggplot(aes(predSM,soilwater))+geom_point()+
+  geom_abline(intercept=0,slope=1,col='black',linetype='dashed')+
+  labs(x='Predicted Soilwater',y='Actual Soilwater')+
+  geom_smooth(method='lm',se=F)
+
+dat1 %>% group_by(doy) %>% summarize_at(vars(sar,ndviInterp,lia,soilwater),mean) %>% 
+  mutate(predSM=SMfun(fixef(sarMod1),sar=sar,lia=lia,ndvi=ndviInterp)) %>% 
+  lm(soilwater~predSM,data=.) %>% summary()
+
+ggarrange(p1,p2,p3,p4,ncol=2,nrow=2)
+    
 
