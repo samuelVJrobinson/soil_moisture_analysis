@@ -184,7 +184,8 @@ dat1 <- dat %>% mutate_at(vars(sar,lia,ndviInterp,soilwater,precip),scale) %>%  
 # dat1 %>% select(sar,lia,soilwater,ndviInterp,precip) %>% pairs(.) #Look at distribution of data
 
 sarMod1 <- lme(sar~ndviInterp+lia*soilwater,random=~1|cell,correlation=corAR1(form=~doy|cell),data=dat1,method='ML') #Best that can be done at the moment
-summary(sarMod1) 
+summary(sarMod1)
+
 { #Residuals
   par(mfrow=c(3,1)); qqnorm(resid(sarMod1)); qqline(resid(sarMod1)); plot(fitted(sarMod1),resid(sarMod1)); plot(predict(sarMod1),predict(sarMod1)+resid(sarMod1),ylab='actual') 
   abline(0,1,col='red')
@@ -194,7 +195,8 @@ summary(sarMod1)
 dat1 %>% mutate(res=resid(sarMod1)) %>%
   select(doy,res) %>% 
   ggplot(aes(doy,res))+
-  geom_point()+geom_smooth(method='gam',formula=y~s(x,k=8))
+  geom_point()+geom_smooth(method='gam',formula=y~s(x,k=8))+
+  geom_hline(yintercept=0)
 
 #Residuals appear spatially structured 
 dat1 %>% mutate(res=resid(sarMod1)) %>% 
@@ -267,7 +269,7 @@ ggplot(dat1,aes(predSM,soilwater))+geom_point()+
   geom_abline(intercept=0,slope=1,col='red')+
   labs(x='Predicted',y='Actual')
 
-#Precited soil moisture (per-day))
+#Predicted soil moisture (per-day))
 p4 <- dat1 %>% group_by(doy) %>% 
   summarize_at(vars(sar,ndviInterp,lia,soilwater),mean) %>% 
   mutate(predSM=SMfun(fixef(sarMod1),sar=sar,lia=lia,ndvi=ndviInterp)) %>% 
@@ -281,5 +283,6 @@ dat1 %>% group_by(doy) %>% summarize_at(vars(sar,ndviInterp,lia,soilwater),mean)
   lm(soilwater~predSM,data=.) %>% summary()
 
 ggarrange(p1,p2,p3,p4,ncol=2,nrow=2)
-    
 
+#NOTE: COMPARE OLD AND NEW SAR DATA FROM LAN BEFORE RUNNING
+# 
